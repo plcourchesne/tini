@@ -90,11 +90,11 @@ static int32_t expect_status[(STATUS_MAX - STATUS_MIN + 1) / 32];
 
 #ifdef PR_SET_CHILD_SUBREAPER
 #define HAS_SUBREAPER 1
-#define OPT_STRING "p:hvwgle:s"
+#define OPT_STRING "p:hvwgld:e:s"
 #define SUBREAPER_ENV_VAR "TINI_SUBREAPER"
 #else
 #define HAS_SUBREAPER 0
-#define OPT_STRING "p:hvwgle:"
+#define OPT_STRING "p:hvwgld:e:"
 #endif
 
 #define VERBOSITY_ENV_VAR "TINI_VERBOSITY"
@@ -108,7 +108,7 @@ static unsigned int subreaper = 0;
 #endif
 static unsigned int parent_death_signal = 0;
 static unsigned int kill_process_group = 0;
-
+static unsigned long int signal_delay_seconds = 0;
 static unsigned int warn_on_reap = 0;
 
 static struct timespec ts = { .tv_sec = 1, .tv_nsec = 0 };
@@ -247,6 +247,7 @@ void print_usage(char* const name, FILE* const file) {
 	fprintf(file, "  -v: Generate more verbose output. Repeat up to 3 times.\n");
 	fprintf(file, "  -w: Print a warning when processes are getting reaped.\n");
 	fprintf(file, "  -g: Send signals to the child's process group.\n");
+	fprintf(file, "  -d DELAY: Delay signals propagation for DELAY second(s).\n");
 	fprintf(file, "  -e EXIT_CODE: Remap EXIT_CODE (from 0 to 255) to 0.\n");
 	fprintf(file, "  -l: Show license and exit.\n");
 #endif
@@ -285,6 +286,17 @@ int set_pdeathsig(char* const arg) {
 	}
 
 	return 1;
+}
+
+int set_signal_delay(char* arg) {
+	char* endptr = NULL;
+	signal_delay_seconds = strtoul(arg, &endptr, 10);
+
+	if ((endptr == NULL) || (*endptr != 0)) {
+		return 1;
+	}
+
+	return 0;
 }
 
 int add_expect_status(char* arg) {
@@ -346,6 +358,14 @@ int parse_args(const int argc, char* const argv[], char* (**child_args_ptr_ptr)[
 
 			case 'g':
 				kill_process_group++;
+				break;
+
+			case 'd':
+				if (set_signal_delay(optarg)) {
+					PRINT_FATAL("Not a valid option for -d: %s", optarg);
+					*parse_fail_exitcode_ptr = 1;
+					return 1;
+				}
 				break;
 
 			case 'e':
@@ -513,6 +533,12 @@ int wait_and_forward_signal(sigset_t const* const parent_sigset_ptr, pid_t const
 		}
 	} else {
 		/* There is a signal to handle here */
+
+		if (signal_delay_seconds > 0) {
+			PRINT_DEBUG("Delaying signal for %lu seconds", signal_delay_seconds);
+			sleep(signal_delay_seconds);
+		}
+
 		switch (sig.si_signo) {
 			case SIGCHLD:
 				/* Special-cased, as we don't forward SIGCHLD. Instead, we'll
